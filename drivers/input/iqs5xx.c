@@ -88,9 +88,9 @@ static void iqs5xx_work_handler(struct k_work *work) {
     int ret;
 
         /* IQS5xx only allows I2C when RDY is high — verify before attempting */
-    if (!gpio_pin_get_dt(&config->rdy_gpio)) {
-        LOG_WRN("RDY low at work handler entry, skipping");
-        return;  /* No end_comm needed — we never opened a window */
+    if (gpio_pin_get_dt(&config->rdy_gpio)) {
+        LOG_WRN("RDY high at work handler entry, skipping");
+        return;
     }
 
     // Read system info registers.
@@ -391,7 +391,7 @@ static int iqs5xx_init(const struct device *dev) {
         return ret;
     }
 
-    ret = gpio_pin_interrupt_configure_dt(&config->rdy_gpio, GPIO_INT_EDGE_RISING);
+    ret = gpio_pin_interrupt_configure_dt(&config->rdy_gpio, GPIO_INT_EDGE_FALLING);
     if (ret < 0) {
         LOG_ERR("Failed to configure RDY interrupt: %d", ret);
         return ret;
