@@ -99,6 +99,7 @@ static void iqs5xx_work_handler(struct k_work *work) {
     ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_0, &sys_info_0);
     if (ret < 0) {
         LOG_ERR("Failed to read system info 0: %d", ret);
+        i2c_recover_bus(config->i2c.bus);
         goto end_comm;
     }
 
@@ -124,14 +125,14 @@ static void iqs5xx_work_handler(struct k_work *work) {
     // Handle reset indication.
     if (sys_info_0 & IQS5XX_SHOW_RESET) {
         LOG_INF("Device reset detected");
-        // Acknowledge reset.
         iqs5xx_write_reg8(dev, IQS5XX_SYSTEM_CONTROL_0, IQS5XX_ACK_RESET);
-        // Re-configure device after reset.
-        int setup_ret = iqs5xx_setup_device(dev);
+        iqs5xx_end_comm_window(dev);  /* close this window first */
+        k_msleep(10);                  /* let device process it */
+        int setup_ret = iqs5xx_setup_device(dev);  /* setup opens its own window */
         if (setup_ret < 0) {
             LOG_ERR("Failed to setup device after reset: %d", setup_ret);
         }
-        goto end_comm;
+        return;  /* NOT goto end_comm — setup_device already ended the window */
     }
 
     bool tp_movement = (sys_info_1 & IQS5XX_TP_MOVEMENT) != 0;
