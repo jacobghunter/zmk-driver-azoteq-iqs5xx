@@ -102,9 +102,10 @@ static void iqs5xx_work_handler(struct k_work *work) {
         goto end_comm;
     }
 
-    ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_1, &sys_info_1);
+    ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_0, &sys_info_0);
     if (ret < 0) {
-        LOG_ERR("Failed to read system info 1: %d", ret);
+        LOG_ERR("Failed to read system info 0: %d", ret);
+        i2c_recover_bus(config->i2c.bus);  /* recover TWIM from error state */
         goto end_comm;
     }
 
