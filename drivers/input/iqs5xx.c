@@ -88,12 +88,16 @@ static void iqs5xx_work_handler(struct k_work *work) {
     int ret;
 
     k_usleep(50);
-    
-    /* IQS5xx only allows I2C when RDY is high — verify before attempting */
+
+    /* IQS5xx only allows I2C when RDY is asserted — verify before attempting */
     if (!gpio_pin_get_dt(&config->rdy_gpio)) {
         LOG_WRN("RDY not asserted at work handler entry, skipping");
         return;
     }
+
+    int sda_state = gpio_pin_get_raw(DEVICE_DT_GET(DT_NODELABEL(gpio1)), 11);
+    int scl_state = gpio_pin_get_raw(DEVICE_DT_GET(DT_NODELABEL(gpio0)), 10);
+    LOG_INF("SDA=%d SCL=%d before read", sda_state, scl_state);
 
     // Read system info registers.
     ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_0, &sys_info_0);
@@ -103,22 +107,24 @@ static void iqs5xx_work_handler(struct k_work *work) {
         goto end_comm;
     }
 
-    ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_0, &sys_info_0);
+    ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_1, &sys_info_1);
     if (ret < 0) {
-        LOG_ERR("Failed to read system info 0: %d", ret);
-        i2c_recover_bus(config->i2c.bus);  /* recover TWIM from error state */
+        LOG_ERR("Failed to read system info 1: %d", ret);
+        i2c_recover_bus(config->i2c.bus);
         goto end_comm;
     }
 
     ret = iqs5xx_read_reg8(dev, IQS5XX_GESTURE_EVENTS_0, &gesture_events_0);
     if (ret < 0) {
         LOG_ERR("Failed to read gesture events: %d", ret);
+        i2c_recover_bus(config->i2c.bus);
         goto end_comm;
     }
 
     ret = iqs5xx_read_reg8(dev, IQS5XX_GESTURE_EVENTS_1, &gesture_events_1);
     if (ret < 0) {
         LOG_ERR("Failed to read gesture events 1: %d", ret);
+        i2c_recover_bus(config->i2c.bus);
         goto end_comm;
     }
 
@@ -126,19 +132,18 @@ static void iqs5xx_work_handler(struct k_work *work) {
     if (sys_info_0 & IQS5XX_SHOW_RESET) {
         LOG_INF("Device reset detected");
         iqs5xx_write_reg8(dev, IQS5XX_SYSTEM_CONTROL_0, IQS5XX_ACK_RESET);
-        iqs5xx_end_comm_window(dev);  /* close this window first */
-        k_msleep(10);                  /* let device process it */
-        int setup_ret = iqs5xx_setup_device(dev);  /* setup opens its own window */
+        iqs5xx_end_comm_window(dev);
+        k_msleep(10);
+        int setup_ret = iqs5xx_setup_device(dev);
         if (setup_ret < 0) {
             LOG_ERR("Failed to setup device after reset: %d", setup_ret);
         }
-        return;  /* NOT goto end_comm — setup_device already ended the window */
+        return; /* setup_device already ended the window */
     }
 
     bool tp_movement = (sys_info_1 & IQS5XX_TP_MOVEMENT) != 0;
     bool scroll = (gesture_events_1 & IQS5XX_SCROLL) != 0;
     if (!scroll) {
-        // Clear accumulators if we're not actively scrolling.
         data->scroll_x_acc = 0;
         data->scroll_y_acc = 0;
     }
@@ -171,10 +176,6 @@ static void iqs5xx_work_handler(struct k_work *work) {
         }
     }
 
-    // Handle movement and gestures.
-    //
-    // Each one of these branches needs to send the last report it makes as
-    // sync to ensure that the input subsystem processes things in order.
     if (hold_became_active) {
         LOG_INF("Hold became active");
         input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
@@ -184,30 +185,20 @@ static void iqs5xx_work_handler(struct k_work *work) {
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
         data->active_hold = false;
     } else if (button_pressed) {
-        // Cancel any pending release.
         k_work_cancel_delayable(&data->button_release_work);
-
-        // Press the button immediately.
         input_report_key(dev, button_code, 1, true, K_FOREVER);
         data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
-
-        // Schedule release after 100ms.
         k_work_schedule(&data->button_release_work, K_MSEC(100));
     } else if (scroll) {
-        // TODO: Expose this divisor.
         int16_t scroll_div = 32;
-
-        // Only one scrolling direction is valid at a time.
-        // End the communication right after reporting the movement.
         if (rel_x != 0) {
-            // By default the x axis is already "natural".
             if (!config->natural_scroll_x) {
                 rel_x *= -1;
             }
             data->scroll_x_acc += rel_x;
             if (abs(data->scroll_x_acc) >= scroll_div) {
                 input_report_rel(dev, INPUT_REL_HWHEEL, data->scroll_x_acc / scroll_div, true,
-                                K_FOREVER);
+                                 K_FOREVER);
                 data->scroll_x_acc %= scroll_div;
             }
             goto end_comm;
@@ -222,7 +213,6 @@ static void iqs5xx_work_handler(struct k_work *work) {
                                  K_FOREVER);
                 data->scroll_y_acc %= scroll_div;
             }
-
             goto end_comm;
         }
     } else if (tp_movement) {
@@ -231,7 +221,6 @@ static void iqs5xx_work_handler(struct k_work *work) {
             LOG_ERR("Failed to read number of fingers: %d", ret);
             goto end_comm;
         }
-
         if (rel_x != 0 || rel_y != 0) {
             input_report_rel(dev, INPUT_REL_X, rel_x, false, K_FOREVER);
             input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
@@ -239,7 +228,6 @@ static void iqs5xx_work_handler(struct k_work *work) {
     }
 
 end_comm:
-    // End communication window.
     iqs5xx_end_comm_window(dev);
 }
 
