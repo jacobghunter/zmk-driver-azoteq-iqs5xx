@@ -87,6 +87,12 @@ static void iqs5xx_work_handler(struct k_work *work) {
     uint8_t sys_info_0, sys_info_1, gesture_events_0, gesture_events_1, num_fingers;
     int ret;
 
+        /* IQS5xx only allows I2C when RDY is high — verify before attempting */
+    if (!gpio_pin_get_dt(&config->rdy_gpio)) {
+        LOG_WRN("RDY low at work handler entry, skipping");
+        return;  /* No end_comm needed — we never opened a window */
+    }
+
     // Read system info registers.
     ret = iqs5xx_read_reg8(dev, IQS5XX_SYSTEM_INFO_0, &sys_info_0);
     if (ret < 0) {
