@@ -90,8 +90,8 @@ static void iqs5xx_work_handler(struct k_work *work) {
     k_usleep(50);
     
     /* IQS5xx only allows I2C when RDY is high — verify before attempting */
-    if (gpio_pin_get_dt(&config->rdy_gpio)) {
-        LOG_WRN("RDY high at work handler entry, skipping");
+    if (!gpio_pin_get_dt(&config->rdy_gpio)) {
+        LOG_WRN("RDY not asserted at work handler entry, skipping");
         return;
     }
 
