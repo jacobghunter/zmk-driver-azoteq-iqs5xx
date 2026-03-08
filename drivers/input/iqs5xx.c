@@ -115,6 +115,11 @@ static void iqs5xx_work_handler(struct k_work *work) {
         LOG_INF("Device reset detected");
         // Acknowledge reset.
         iqs5xx_write_reg8(dev, IQS5XX_SYSTEM_CONTROL_0, IQS5XX_ACK_RESET);
+        // Re-configure device after reset.
+        int setup_ret = iqs5xx_setup_device(dev);
+        if (setup_ret < 0) {
+            LOG_ERR("Failed to setup device after reset: %d", setup_ret);
+        }
         goto end_comm;
     }
 
