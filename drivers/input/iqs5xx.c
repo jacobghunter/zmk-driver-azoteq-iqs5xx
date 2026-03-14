@@ -20,6 +20,22 @@ LOG_MODULE_REGISTER(iqs5xx, CONFIG_INPUT_LOG_LEVEL);
 
 static int iqs5xx_setup_device(const struct device *dev);
 
+static int iqs5xx_wait_for_rdy(const struct device *dev) {
+    const struct iqs5xx_config *config = dev->config;
+    int timeout = 500; // 500ms
+
+    while (!gpio_pin_get_dt(&config->rdy_gpio) && timeout > 0) {
+        k_msleep(1);
+        timeout--;
+    }
+
+    if (timeout == 0) {
+        return -ETIMEDOUT;
+    }
+
+    return 0;
+}
+
 static int iqs5xx_read_reg16(const struct device *dev, uint16_t reg, uint16_t *val) {
     const struct iqs5xx_config *config = dev->config;
     uint8_t buf[2];
@@ -242,6 +258,12 @@ static int iqs5xx_setup_device(const struct device *dev) {
     const struct iqs5xx_config *config = dev->config;
     int ret;
 
+    ret = iqs5xx_wait_for_rdy(dev);
+    if (ret < 0) {
+        LOG_ERR("Timed out waiting for RDY before setup: %d", ret);
+        return ret;
+    }
+
     // Enable event mode and trackpad events.
     ret = iqs5xx_write_reg8(dev, IQS5XX_SYSTEM_CONFIG_1,
                             IQS5XX_EVENT_MODE | IQS5XX_TP_EVENT | IQS5XX_GESTURE_EVENT);
@@ -383,19 +405,23 @@ static int iqs5xx_init(const struct device *dev) {
         return ret;
     }
 
-    ret = gpio_pin_interrupt_configure_dt(&config->rdy_gpio, GPIO_INT_EDGE_FALLING);
+    // Wait for device to be ready.
+    ret = iqs5xx_wait_for_rdy(dev);
     if (ret < 0) {
-        LOG_ERR("Failed to configure RDY interrupt: %d", ret);
+        LOG_ERR("Timed out waiting for RDY during initialization: %d", ret);
         return ret;
     }
-
-    // Wait for device to be ready.
-    k_msleep(100);
 
     // Setup device configuration.
     ret = iqs5xx_setup_device(dev);
     if (ret < 0) {
         LOG_ERR("Failed to setup device: %d", ret);
+        return ret;
+    }
+
+    ret = gpio_pin_interrupt_configure_dt(&config->rdy_gpio, GPIO_INT_EDGE_TO_ACTIVE);
+    if (ret < 0) {
+        LOG_ERR("Failed to configure RDY interrupt: %d", ret);
         return ret;
     }
 
