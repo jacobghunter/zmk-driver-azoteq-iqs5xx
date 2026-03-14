@@ -87,6 +87,15 @@ static void iqs5xx_work_handler(struct k_work *work) {
     LOG_INF("Work handler running");
     struct iqs5xx_data *data = CONTAINER_OF(work, struct iqs5xx_data, work);
     const struct device *dev = data->dev;
+
+    if (!data->initialized) {
+        LOG_INF("First RDY received, running initial setup");
+        int ret = iqs5xx_setup_device(dev);
+        LOG_INF("Initial setup returned: %d", ret);
+        data->initialized = (ret == 0);
+        return;
+    }
+
     const struct iqs5xx_config *config = dev->config;
     uint8_t sys_info_0, sys_info_1, gesture_events_0, gesture_events_1, num_fingers;
     int ret;
@@ -115,13 +124,10 @@ static void iqs5xx_work_handler(struct k_work *work) {
     }
     LOG_INF("gesture_events_1=0x%02X", gesture_events_1);
     if (sys_info_0 & IQS5XX_SHOW_RESET) {
-        LOG_INF("Device reset detected, ACKing and re-running setup");
+        LOG_INF("Device reset detected, ACKing");
         iqs5xx_write_reg8(dev, IQS5XX_SYSTEM_CONTROL_0, IQS5XX_ACK_RESET);
-        iqs5xx_end_comm_window(dev);
-        k_msleep(10);
-        int setup_ret = iqs5xx_setup_device(dev);
-        LOG_INF("Re-setup after reset returned: %d", setup_ret);
-        return;
+        data->initialized = false;
+        goto end_comm;
     }
     bool tp_movement = (sys_info_1 & IQS5XX_TP_MOVEMENT) != 0;
     bool scroll = (gesture_events_1 & IQS5XX_SCROLL) != 0;
@@ -350,12 +356,7 @@ static int iqs5xx_init(const struct device *dev) {
     LOG_INF("iqs5xx_init: RDY interrupt configured (EDGE_RISING)");
     LOG_INF("iqs5xx_init: waiting 100ms for device to be ready");
     k_msleep(100);
-    ret = iqs5xx_setup_device(dev);
-    if (ret < 0) {
-        LOG_ERR("Failed to setup device: %d", ret);
-        return ret;
-    }
-    data->initialized = true;
+    data->initialized = false;
     LOG_INF("iqs5xx_init: complete, waiting for RDY interrupts");
     return 0;
 }
