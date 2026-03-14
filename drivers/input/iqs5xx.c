@@ -103,6 +103,13 @@ static void iqs5xx_work_handler(struct k_work *work) {
     uint8_t sys_info_0, sys_info_1, gesture_events_0, gesture_events_1, num_fingers;
     int ret;
 
+    LOG_DBG("Work handler starting");
+
+    if (!data->initialized) {
+        LOG_DBG("Device not yet initialized, skipping work handler");
+        return;
+    }
+
     k_usleep(50);
 
     /* IQS5xx only allows I2C when RDY is asserted — verify before attempting */
@@ -251,6 +258,7 @@ static void iqs5xx_rdy_handler(const struct device *port, struct gpio_callback *
                                gpio_port_pins_t pins) {
     struct iqs5xx_data *data = CONTAINER_OF(cb, struct iqs5xx_data, rdy_cb);
 
+    LOG_DBG("RDY interrupt fired");
     k_work_submit(&data->work);
 }
 
@@ -423,6 +431,12 @@ static int iqs5xx_init(const struct device *dev) {
     if (ret < 0) {
         LOG_ERR("Failed to configure RDY interrupt: %d", ret);
         return ret;
+    }
+
+    // If RDY is already active, trigger the work handler manually.
+    if (gpio_pin_get_dt(&config->rdy_gpio)) {
+        LOG_DBG("RDY already active at init, triggering work handler");
+        k_work_submit(&data->work);
     }
 
     data->initialized = true;
