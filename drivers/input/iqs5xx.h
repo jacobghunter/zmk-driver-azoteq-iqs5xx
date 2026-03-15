@@ -136,4 +136,6 @@ struct iqs5xx_data {
     // Inertial cursor state.
     int16_t inertial_x;
     int16_t inertial_y;
+    int16_t velocity_avg_x;
+    int16_t velocity_avg_y;
 };

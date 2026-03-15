@@ -88,13 +88,39 @@ static void iqs5xx_inertial_work_handler(struct k_work *work) {
     const struct device *dev = data->dev;
     const struct iqs5xx_config *config = dev->config;
 
-    data->inertial_x = (data->inertial_x * (100 - config->inertial_decay_percent)) / 100;
-    data->inertial_y = (data->inertial_y * (100 - config->inertial_decay_percent)) / 100;
+    // Calculate current speed
+    int16_t speed = (int16_t)sqrt(
+        (int32_t)data->inertial_x * data->inertial_x +
+        (int32_t)data->inertial_y * data->inertial_y);
+
+    // Two-stage decay: faster decay at low speeds to snap to a stop
+    // rather than drifting forever at near-zero velocity
+    uint8_t decay;
+    uint32_t interval_ms;
+    if (speed > 30) {
+        // High speed — gentle decay, short interval for smooth motion
+        decay = config->inertial_decay_percent;
+        interval_ms = 12;
+    } else if (speed > 10) {
+        // Medium speed — moderate decay
+        decay = config->inertial_decay_percent + 10;
+        interval_ms = 16;
+    } else {
+        // Low speed — aggressive decay to snap to stop cleanly
+        decay = config->inertial_decay_percent + 25;
+        interval_ms = 20;
+    }
+
+    // Clamp decay to 99 to avoid divide issues
+    if (decay > 99) decay = 99;
+
+    data->inertial_x = (data->inertial_x * (100 - decay)) / 100;
+    data->inertial_y = (data->inertial_y * (100 - decay)) / 100;
 
     if (abs(data->inertial_x) > 0 || abs(data->inertial_y) > 0) {
         input_report_rel(dev, INPUT_REL_X, data->inertial_x, false, K_FOREVER);
         input_report_rel(dev, INPUT_REL_Y, data->inertial_y, true, K_FOREVER);
-        k_work_reschedule(&data->inertial_work, K_MSEC(16));
+        k_work_reschedule(&data->inertial_work, K_MSEC(interval_ms));
     }
 }
 static void iqs5xx_work_handler(struct k_work *work) {
@@ -210,8 +236,13 @@ static void iqs5xx_work_handler(struct k_work *work) {
         }
         if (rel_x != 0 || rel_y != 0) {
             k_work_cancel_delayable(&data->inertial_work);
-            data->inertial_x = rel_x;
-            data->inertial_y = rel_y;
+
+            // Rolling average of last 3 frames for smoother launch velocity
+            data->velocity_avg_x = (data->velocity_avg_x + data->velocity_avg_x + rel_x) / 3;
+            data->velocity_avg_y = (data->velocity_avg_y + data->velocity_avg_y + rel_y) / 3;
+            data->inertial_x = data->velocity_avg_x;
+            data->inertial_y = data->velocity_avg_y;
+
             input_report_rel(dev, INPUT_REL_X, rel_x, false, K_FOREVER);
             input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
         }
@@ -223,8 +254,11 @@ static void iqs5xx_work_handler(struct k_work *work) {
             (int32_t)data->inertial_x * data->inertial_x +
             (int32_t)data->inertial_y * data->inertial_y);
         if (speed >= config->inertial_velocity_threshold) {
-            k_work_reschedule(&data->inertial_work, K_MSEC(16));
+            k_work_reschedule(&data->inertial_work, K_MSEC(12));
         }
+        // Reset accumulator ready for next touch
+        data->velocity_avg_x = 0;
+        data->velocity_avg_y = 0;
     }
     data->was_moving = tp_movement;
 
