@@ -82,6 +82,21 @@ static void iqs5xx_button_release_work_handler(struct k_work *work) {
         }
     }
 }
+static void iqs5xx_inertial_work_handler(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct iqs5xx_data *data = CONTAINER_OF(dwork, struct iqs5xx_data, inertial_work);
+    const struct device *dev = data->dev;
+    const struct iqs5xx_config *config = dev->config;
+
+    data->inertial_x = (data->inertial_x * (100 - config->inertial_decay_percent)) / 100;
+    data->inertial_y = (data->inertial_y * (100 - config->inertial_decay_percent)) / 100;
+
+    if (abs(data->inertial_x) > 0 || abs(data->inertial_y) > 0) {
+        input_report_rel(dev, INPUT_REL_X, data->inertial_x, false, K_FOREVER);
+        input_report_rel(dev, INPUT_REL_Y, data->inertial_y, true, K_FOREVER);
+        k_work_reschedule(&data->inertial_work, K_MSEC(16));
+    }
+}
 static void iqs5xx_work_handler(struct k_work *work) {
     struct iqs5xx_data *data = CONTAINER_OF(work, struct iqs5xx_data, work);
     const struct device *dev = data->dev;
@@ -194,10 +209,25 @@ static void iqs5xx_work_handler(struct k_work *work) {
             goto end_comm;
         }
         if (rel_x != 0 || rel_y != 0) {
+            k_work_cancel_delayable(&data->inertial_work);
+            data->inertial_x = rel_x;
+            data->inertial_y = rel_y;
             input_report_rel(dev, INPUT_REL_X, rel_x, false, K_FOREVER);
             input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
         }
     }
+
+    // detect touch end for inertia trigger
+    if (!tp_movement && data->was_moving && config->inertial_cursor) {
+        int16_t speed = (int16_t)sqrt(
+            (int32_t)data->inertial_x * data->inertial_x +
+            (int32_t)data->inertial_y * data->inertial_y);
+        if (speed >= config->inertial_velocity_threshold) {
+            k_work_reschedule(&data->inertial_work, K_MSEC(16));
+        }
+    }
+    data->was_moving = tp_movement;
+
 end_comm:
     LOG_DBG("Ending comm window");
     iqs5xx_end_comm_window(dev);
@@ -286,6 +316,7 @@ static int iqs5xx_init(const struct device *dev) {
     data->dev = dev;
     k_work_init(&data->work, iqs5xx_work_handler);
     k_work_init_delayable(&data->button_release_work, iqs5xx_button_release_work_handler);
+    k_work_init_delayable(&data->inertial_work, iqs5xx_inertial_work_handler);
     if (config->reset_gpio.port) {
         if (!gpio_is_ready_dt(&config->reset_gpio)) {
             LOG_ERR("Reset GPIO not ready");
@@ -323,6 +354,7 @@ static int iqs5xx_init(const struct device *dev) {
     }
     k_msleep(100);
     data->initialized = false;
+    LOG_INF("IQS5xx init complete");
     return 0;
 }
 #define IQS5XX_INIT(n)                                                                             \
@@ -343,6 +375,9 @@ static int iqs5xx_init(const struct device *dev) {
         .flip_y = DT_INST_PROP(n, flip_y),                                                         \
         .bottom_beta = DT_INST_PROP_OR(n, bottom_beta, 5),                                         \
         .stationary_threshold = DT_INST_PROP_OR(n, stationary_threshold, 5),                       \
+        .inertial_cursor = DT_INST_PROP(n, inertial_cursor),                                       \
+        .inertial_velocity_threshold = DT_INST_PROP_OR(n, inertial_velocity_threshold, 5),         \
+        .inertial_decay_percent = DT_INST_PROP_OR(n, inertial_decay_percent, 15),                  \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, iqs5xx_init, NULL, &iqs5xx_data_##n, &iqs5xx_config_##n, POST_KERNEL, \
                           CONFIG_INPUT_INIT_PRIORITY, NULL);

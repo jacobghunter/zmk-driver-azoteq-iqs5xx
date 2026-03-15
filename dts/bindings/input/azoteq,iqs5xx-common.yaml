@@ -61,3 +61,12 @@ properties:
     description: |
       How far a finger must move (in pixels) to not be considered stationary.
     default: 5
+
+  inertial-cursor:
+    type: boolean
+  inertial-velocity-threshold:
+    type: int
+    default: 5
+  inertial-decay-percent:
+    type: int
+    default: 15
